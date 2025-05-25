@@ -1,0 +1,193 @@
+blueprint:
+  name: SG Ready PV-Optimierung (mit Moduswahl, ohne EVU Sperre)
+  description: >
+    Steuert SG0/SG1 je nach PV-Überschuss und Modus-Auswahl.
+    Im Modus "Auto" nach PV-Logik, sonst wird nach deiner Auswahl hart geschaltet.
+    Die Moduswahl erfolgt über einen input_select (mit: Auto, Normbetrieb, PV-Optimierung, PV-Boost, Netzsperre).
+  domain: automation
+  input:
+    pv_sensor:
+      name: PV-Überschuss Sensor (Grid Power, negativ bei Einspeisung)
+      selector:
+        entity:
+          domain: sensor
+    sg0_switch:
+      name: SG0 Ausgang
+      selector:
+        entity:
+          domain: switch
+    sg1_switch:
+      name: SG1 Ausgang
+      selector:
+        entity:
+          domain: switch
+    modus_select:
+      name: SG Ready Modus-Select (input_select)
+      selector:
+        entity:
+          domain: input_select
+    sg0_threshold:
+      name: SG0 Schaltschwelle (Watt, NEGATIV)
+      default: -1000
+      selector:
+        number:
+          min: -15000
+          max: 0
+          step: 100
+    sg1_threshold:
+      name: SG1 Schaltschwelle (Watt, NEGATIV)
+      default: -3000
+      selector:
+        number:
+          min: -15000
+          max: 0
+          step: 100
+    off_threshold:
+      name: Ausschalt-Schwelle (Watt, NEGATIV)
+      default: -500
+      selector:
+        number:
+          min: -15000
+          max: 0
+          step: 100
+    delay:
+      name: Schaltverzögerung (Sekunden)
+      default: 60
+      selector:
+        number:
+          min: 0
+          max: 600
+          step: 5
+
+mode: single
+
+trigger:
+  - platform: state
+    entity_id: !input modus_select
+
+  - platform: numeric_state
+    entity_id: !input pv_sensor
+    below: !input sg1_threshold
+    for:
+      seconds: !input delay
+
+  - platform: numeric_state
+    entity_id: !input pv_sensor
+    below: !input sg0_threshold
+    above: !input sg1_threshold
+    for:
+      seconds: !input delay
+
+  - platform: numeric_state
+    entity_id: !input pv_sensor
+    above: !input off_threshold
+    for:
+      seconds: !input delay
+
+action:
+  - choose:
+      # Im Modus "Auto" nach PV schalten!
+      - conditions:
+          - condition: state
+            entity_id: !input modus_select
+            state: "Auto"
+        sequence:
+          # Beide Schwellen unterschritten: SG0 und SG1 AN
+          - choose:
+              - conditions:
+                  - condition: numeric_state
+                    entity_id: !input pv_sensor
+                    below: !input sg1_threshold
+                sequence:
+                  - service: switch.turn_on
+                    target:
+                      entity_id: !input sg0_switch
+                  - service: switch.turn_on
+                    target:
+                      entity_id: !input sg1_switch
+          # Nur SG0-Schwelle unterschritten: SG0 AN, SG1 AUS
+          - choose:
+              - conditions:
+                  - condition: numeric_state
+                    entity_id: !input pv_sensor
+                    below: !input sg0_threshold
+                    above: !input sg1_threshold
+                sequence:
+                  - service: switch.turn_on
+                    target:
+                      entity_id: !input sg0_switch
+                  - service: switch.turn_off
+                    target:
+                      entity_id: !input sg1_switch
+          # Überschuss fast weg: beide AUS
+          - choose:
+              - conditions:
+                  - condition: numeric_state
+                    entity_id: !input pv_sensor
+                    above: !input off_threshold
+                sequence:
+                  - service: switch.turn_off
+                    target:
+                      entity_id: !input sg0_switch
+                  - service: switch.turn_off
+                    target:
+                      entity_id: !input sg1_switch
+
+      # Bei manuellem Modus wird fest geschaltet (egal welcher):
+      - conditions:
+          - condition: or
+            conditions:
+              - condition: state
+                entity_id: !input modus_select
+                state: "Normbetrieb"
+              - condition: state
+                entity_id: !input modus_select
+                state: "PV-Optimierung"
+              - condition: state
+                entity_id: !input modus_select
+                state: "PV-Boost"
+              - condition: state
+                entity_id: !input modus_select
+                state: "Netzsperre"
+        sequence:
+          # Immer erst beide aus:
+          - service: switch.turn_off
+            target:
+              entity_id: !input sg0_switch
+          - service: switch.turn_off
+            target:
+              entity_id: !input sg1_switch
+          # Jetzt entsprechend Modus setzen:
+          - choose:
+              - conditions:
+                  - condition: state
+                    entity_id: !input modus_select
+                    state: "Normbetrieb"
+                sequence: []
+              - conditions:
+                  - condition: state
+                    entity_id: !input modus_select
+                    state: "PV-Optimierung"
+                sequence:
+                  - service: switch.turn_on
+                    target:
+                      entity_id: !input sg0_switch
+              - conditions:
+                  - condition: state
+                    entity_id: !input modus_select
+                    state: "PV-Boost"
+                sequence:
+                  - service: switch.turn_on
+                    target:
+                      entity_id: !input sg0_switch
+                  - service: switch.turn_on
+                    target:
+                      entity_id: !input sg1_switch
+              - conditions:
+                  - condition: state
+                    entity_id: !input modus_select
+                    state: "Netzsperre"
+                sequence:
+                  - service: switch.turn_on
+                    target:
+                      entity_id: !input sg1_switch
